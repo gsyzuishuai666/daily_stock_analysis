@@ -36,4 +36,8 @@ jobs:
             exit 0
           fi
           git commit -m "chore: keepalive $(date -u +%Y-%m-%d)"
-          git push
+          if ! git push; then
+            echo "::error title=提交失败，缺少写权限::仓库当前的 Workflow permissions 是 Read repository contents。"
+            echo "::error::到 Settings → Actions → General → Workflow permissions 选择 Read and write，然后手动 Run workflow 重跑本工作流。"
+            exit 1
+          fi

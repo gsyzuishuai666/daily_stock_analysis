@@ -1,0 +1,39 @@
+name: 仓库保活
+
+# 为什么要这个：
+# GitHub 会在「仓库连续 60 天没有任何提交」后自动禁用所有 schedule 定时任务。
+# 这个 fork 通常只读上游、自己不发提交，所以大约两个月后「每日股票分析」的定时会被静默关掉。
+# 本工作流每月提交一个时间戳文件，制造仓库活动，从而让定时任务一直保持启用。
+
+on:
+  schedule:
+    - cron: '0 3 1 * *'   # 每月 1 日 03:00 UTC = 北京时间 11:00
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 更新保活时间戳并提交
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .keepalive
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .keepalive
+          if git diff --cached --quiet; then
+            echo "无变化，跳过提交"
+            exit 0
+          fi
+          git commit -m "chore: keepalive $(date -u +%Y-%m-%d)"
+          git push

@@ -1,7 +1,12 @@
 name: 每日股票分析
 
+permissions:
+  contents: read
+
 on:
   # 定时触发 - 每天北京时间 18:00 (UTC 10:00)
+  # 注意：GitHub 的 schedule 是 best-effort，本仓库历史上会被推迟数小时才启动，
+  # 需要准点请用外部定时器调用 workflow_dispatch（见 docs/定时与推送配置指南.md）。
   schedule:
     - cron: '0 10 * * 1-5'     # 周一到周五，UTC 10:00 = 北京时间 18:00
   
@@ -17,6 +22,7 @@ on:
           - full          # 完整分析（股票+大盘）
           - market-only   # 仅大盘复盘
           - stocks-only   # 仅股票分析
+          - notify-check  # 只校验通知渠道配置（不分析、不发送）
       force_run:
         description: '强制运行（跳过交易日检查）'
         required: false
@@ -532,13 +538,29 @@ jobs:
           echo "  Slack: $(([ -n "$SLACK_WEBHOOK_URL" ] || ([ -n "$SLACK_BOT_TOKEN" ] && [ -n "$SLACK_CHANNEL_ID" ])) && echo '✅ 已配置' || echo '⚪ 未配置')"
           echo "=========================================="
           echo ""
-          
+
+          # 只校验通知渠道：不跑分析、不发消息，用于配好 Secrets 后快速确认
+          if [ "$MODE" = "notify-check" ]; then
+            echo "🔎 通知渠道自检（不发送消息）"
+            if python main.py --check-notify; then
+              echo "✅ 通知渠道配置检查通过"
+              exit 0
+            fi
+            echo "::error title=通知渠道未就绪::至少有一个通知渠道没有配置，或成对 key 只配了一半，分析结果将无法推送"
+            exit 1
+          fi
+
           # 构建命令行参数
           FORCE_RUN_ARG=""
           if [ "${{ github.event.inputs.force_run }}" = "true" ]; then
             FORCE_RUN_ARG="--force-run"
             echo "⚡ 已启用强制运行模式（跳过交易日检查）"
           fi
+
+          # 通知渠道预检（只读，不发送）：没配渠道时给出明确告警，
+          # 避免“分析成功但手机没收到任何消息”无从排查
+          python main.py --check-notify > /dev/null 2>&1 \
+            || echo "::warning title=本次不会推送::未检测到可用通知渠道（或成对 key 只配了一半），结果只会保存在 Artifacts 里"
 
           # 执行分析
           if [ "$MODE" = "market-only" ]; then
@@ -571,6 +593,17 @@ jobs:
             ls -la reports/
           else
             echo "⚠️ 未生成报告文件"
+          fi
+
+          # 把最新一份报告写进 Actions 运行摘要：手机上不下载 Artifacts 也能直接读
+          if [ -d "reports" ]; then
+            LATEST_REPORT=$(ls -t reports/*.md 2>/dev/null | head -1)
+            if [ -n "$LATEST_REPORT" ]; then
+              {
+                echo "## 📈 $(basename "$LATEST_REPORT")"
+                head -n 1200 "$LATEST_REPORT"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
           echo ""
           if [ -f "logs/stock_analysis_$(date +%Y%m%d).log" ]; then
